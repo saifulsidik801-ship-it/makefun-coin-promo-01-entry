@@ -14,7 +14,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, Transaction } from "@solana/web3.js";
 import { AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { PumpFunSDK } from "pumpdotfun-sdk";
 
@@ -28,6 +28,40 @@ const COIN_DESCRIPTION =
   "On make.fun only the last submission before the deadline counts. So this coin is the last one. " +
   "No resubmits. No second chances. Buy the last.";
 
+// The websocket subscription behind confirmTransaction breaks through this
+// machine's egress proxy (EPROTO), so confirm over plain HTTP polling.
+async function confirmHttp(
+  connection: Connection,
+  signature: string,
+  label: string,
+): Promise<void> {
+  for (let i = 0; i < 40; i++) {
+    const res = await connection.getSignatureStatuses([signature]);
+    const st = res.value[0];
+    if (st && st.confirmationStatus === "confirmed") return;
+    if (st && st.err) throw new Error(`${label} failed on-chain: ${JSON.stringify(st.err)}`);
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  throw new Error(`${label} not confirmed after 120s (sig ${signature})`);
+}
+
+async function sendTx(
+  connection: Connection,
+  tx: Transaction,
+  signers: Keypair[],
+  label: string,
+): Promise<string> {
+  tx.feePayer = signers[0].publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
+  tx.sign(...signers);
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: "confirmed",
+  });
+  console.log(`${label} signature:`, sig);
+  await confirmHttp(connection, sig, label);
+  return sig;
+}
 function resolveKeypairPath(): string {
   const raw = process.env.KEYPAIR_PATH || "~/.solana/sidik-bbc-keypair.json";
   return raw.startsWith("~/") ? raw.replace("~", homedir()) : raw;
@@ -58,58 +92,57 @@ async function main(): Promise<void> {
   // the metadata lives in this repo and the coin points at its raw URL.
   const metadataUri = `https://raw.githubusercontent.com/saifulsidik801-ship-it/makefun-coin-promo-01-entry/main/metadata.json`;
 
-  const mint = Keypair.generate();
-  console.log("mint:", mint.publicKey.toBase58());
-  console.log("metadataUri:", metadataUri);
+  // MINT set = resume mode: the coin already exists on-chain (a previous run
+  // created it but died before the buy). Skip the create, just do the buy.
+  const existingMint = process.env.MINT || "";
+  const createSig = process.env.CREATE_SIG || "";
+  let mint: Keypair;
+  let mintPubkey: PublicKey;
+  let finalCreateSig = createSig;
+
+  if (existingMint) {
+    mintPubkey = new PublicKey(existingMint);
+    console.log("resuming existing mint:", existingMint);
+  } else {
+    mint = Keypair.generate();
+    mintPubkey = mint.publicKey;
+    console.log("mint:", mint.publicKey.toBase58());
+    console.log("metadataUri:", metadataUri);
+
+    // 1) Create the coin (no buy bundled — the buy goes in its own tx so a
+    // buy failure can never block the create).
+    const createTx = await sdk.getCreateInstructions(
+      creator.publicKey,
+      COIN_NAME,
+      COIN_SYMBOL,
+      metadataUri,
+      mint,
+    );
+    finalCreateSig = await sendTx(connection, createTx, [creator, mint], "create");
+  }
 
   const buyLamports = BigInt(Math.round(buySol * LAMPORTS_PER_SOL));
-
-  // 1) Create the coin (no buy bundled — the buy goes in its own tx so a
-  // buy failure can never block the create).
-  const createTx = await sdk.getCreateInstructions(
-    creator.publicKey,
-    COIN_NAME,
-    COIN_SYMBOL,
-    metadataUri,
-    mint,
-  );
-  createTx.feePayer = creator.publicKey;
-  createTx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
-  createTx.sign(creator, mint);
-  const createSig = await connection.sendRawTransaction(createTx.serialize(), {
-    skipPreflight: false,
-    preflightCommitment: "confirmed",
-  });
-  console.log("create signature:", createSig);
-  await connection.confirmTransaction(createSig, "confirmed");
 
   // 2) Small opening buy so the chart starts alive.
   const buyTx = await sdk.getBuyInstructionsBySolAmount(
     creator.publicKey,
-    mint.publicKey,
+    mintPubkey,
     buyLamports,
     500n,
     "confirmed",
   );
-  buyTx.feePayer = creator.publicKey;
-  buyTx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
-  buyTx.sign(creator);
-  const buySig = await connection.sendRawTransaction(buyTx.serialize(), {
-    skipPreflight: false,
-    preflightCommitment: "confirmed",
-  });
+  const buySig = await sendTx(connection, buyTx, [creator], "buy");
   console.log("buy signature:", buySig);
-  await connection.confirmTransaction(buySig, "confirmed");
 
-  const result = { signature: createSig, success: true };
+  const result = { signature: finalCreateSig, success: true };
 
 
   const launch = {
     name: COIN_NAME,
     symbol: COIN_SYMBOL,
-    mint: mint.publicKey.toBase58(),
+    mint: mintPubkey.toBase58(),
     signature: result.signature,
-    pumpfunUrl: `https://pump.fun/coin/${mint.publicKey.toBase58()}`,
+    pumpfunUrl: `https://pump.fun/coin/${mintPubkey.toBase58()}`,
     bountyUrl: BOUNTY_URL,
   };
   writeFileSync("./LAUNCH.json", JSON.stringify(launch, null, 2) + "\n");
