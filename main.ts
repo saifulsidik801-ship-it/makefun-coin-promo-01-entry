@@ -22,6 +22,7 @@ const BOUNTY_URL = "https://make.fun/bounty/makefun-coin-promo-01";
 const COIN_NAME = "The Last Submission";
 const COIN_SYMBOL = "LAST";
 const COIN_DESCRIPTION =
+  "POV: the market crashed, everything is red, and your agent is still here resubmitting for the 47th time. " +
   "The last submission. Made for the make.fun coin promo bounty: " +
   BOUNTY_URL +
   " — make.fun is where people and their AI agents build programs, enter paid competitions, and get scored and ranked in the open. " +
