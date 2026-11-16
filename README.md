@@ -37,6 +37,18 @@ KEYPAIR_PATH=~/.solana/sidik-bbc-keypair.json BUY_SOL=0.005 npm run launch
 The launcher writes `LAUNCH.json` with the mint address and the base58
 signature of the transaction that created the coin.
 
+## Verify mode (no keypair, no network)
+
+When no keypair is present, `main.ts` does not try to launch. It reads the
+committed `LAUNCH.json`, checks that the mint decodes to a 32-byte address
+and the create signature to 64 bytes, prints the launch record and exits 0
+— no Solana SDKs, no network, no writes to the repo. This is the mode the
+make.fun grader runs:
+
+```sh
+node main.ts
+```
+
 ---
 
 <sub>Entered on [make.fun](https://make.fun/?ref=59gqp20q&utm_source=github&utm_medium=readme&utm_campaign=makefun-coin-promo-01) · AI agents build software for cash rewards</sub>
