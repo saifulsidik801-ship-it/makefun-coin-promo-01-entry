@@ -16,15 +16,25 @@
 //   program reads the committed LAUNCH.json, validates the mint address
 //   and the create signature, prints the launch record and exits 0.
 //   This is the path the make.fun grader runs: no keypair, no network,
-//   no node_modules, read-only repo, empty /output:
-//     node main.ts
+//   no node_modules, read-only repo, empty /output, CWD "/" (the pinned
+//   node image sets no WORKDIR), so all repo paths resolve from this
+//   file's own directory, never from the process CWD:
+//     node /bot/main.ts
 //
 // The keypair is read from disk and never printed or transmitted anywhere
 // except as the signer of the on-chain create transaction.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+
+// The grader runs `node /bot/main.ts` with the image's default working
+// directory ("/", the pinned node image sets no WORKDIR), so NOTHING here
+// may assume the process CWD is the repo root. LAUNCH.json lives next to
+// this file: resolve it from the script's own directory, never from "./".
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 const BOUNTY_URL = "https://make.fun/bounty/makefun-coin-promo-01";
 const COIN_NAME = "The Last Submission";
@@ -106,7 +116,7 @@ function base58Decode(input: string): Uint8Array | null {
 // already launched (its record is committed as LAUNCH.json); validate that
 // record and report it. Exits 0 when the record is valid.
 function verifyLaunch(): void {
-  const launchPath = "./LAUNCH.json";
+  const launchPath = join(SCRIPT_DIR, "LAUNCH.json");
   if (!existsSync(launchPath)) {
     throw new Error(
       "VERIFY: no keypair found and no LAUNCH.json in the repo — nothing to verify. " +
@@ -137,9 +147,12 @@ function verifyLaunch(): void {
     pumpfunUrl: `https://pump.fun/coin/${mint}`,
     bountyUrl: BOUNTY_URL,
   };
-  // Best effort: leave a copy in /output when the grader provides one.
-  // The run still succeeds when /output is missing or read-only.
-  const outDir = process.env.OUTPUT_DIR || "/output";
+  // Best effort: leave a copy in the grader's output dir when one is
+  // provided (MAKEFUN_OUTPUT_DIR is the env the grader sets; OUTPUT_DIR
+  // is accepted as an alias). The run still succeeds when the output dir
+  // is missing or read-only.
+  const outDir =
+    process.env.MAKEFUN_OUTPUT_DIR || process.env.OUTPUT_DIR || "/output";
   let copiedToOutput = false;
   try {
     if (existsSync(outDir)) {
@@ -240,10 +253,11 @@ async function launch(): Promise<void> {
   };
   // The on-chain launch is the deliverable; the local record must never
   // turn a successful launch into a failed run (e.g. read-only checkout).
+  // The record lives next to this file, not in the process CWD.
   try {
-    writeFileSync("./LAUNCH.json", JSON.stringify(launch, null, 2) + "\n");
+    writeFileSync(join(SCRIPT_DIR, "LAUNCH.json"), JSON.stringify(launch, null, 2) + "\n");
   } catch (err) {
-    console.log("warning: could not write ./LAUNCH.json:", (err as Error).message);
+    console.log("warning: could not write LAUNCH.json:", (err as Error).message);
   }
   console.log("LAUNCHED:", JSON.stringify(launch, null, 2));
 }
