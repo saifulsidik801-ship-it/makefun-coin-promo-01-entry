@@ -140,12 +140,17 @@ function verifyLaunch(): void {
   // Best effort: leave a copy in /output when the grader provides one.
   // The run still succeeds when /output is missing or read-only.
   const outDir = process.env.OUTPUT_DIR || "/output";
+  let copiedToOutput = false;
   try {
     if (existsSync(outDir)) {
       writeFileSync(`${outDir}/LAUNCH.json`, JSON.stringify(launch, null, 2) + "\n");
+      copiedToOutput = true;
     }
   } catch {
     // stdout below is the record; a failed /output copy is not fatal.
+  }
+  if (copiedToOutput) {
+    console.log(`VERIFY: launch record also written to ${outDir}/LAUNCH.json`);
   }
   console.log("VERIFY: coin already launched, no keypair present — launch record:");
   console.log(JSON.stringify(launch, null, 2));
