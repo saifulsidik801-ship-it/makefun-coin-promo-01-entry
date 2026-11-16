@@ -139,6 +139,14 @@ function verifyLaunch(): void {
   if (signature && (!sigBytes || sigBytes.length !== 64)) {
     throw new Error("VERIFY: LAUNCH.json create signature is not a valid 64-byte signature");
   }
+  // The gate reads /output/LAUNCH.json and requires EXACTLY the starter
+  // record shape: {mint, create_signature}. Copy the committed file
+  // verbatim — never rebuild it with extra fields (name/symbol/signature/
+  // pumpfunUrl/bountyUrl). The fix2 build rebuilt it that way and the
+  // gate scored valid 0 (failed_tests), even though VERIFY exited 0.
+  if (typeof record.create_signature !== "string" || !record.create_signature) {
+    throw new Error("VERIFY: LAUNCH.json has no create_signature — the gate requires it");
+  }
   const launch = {
     name: typeof record.name === "string" ? record.name : COIN_NAME,
     symbol: typeof record.symbol === "string" ? record.symbol : COIN_SYMBOL,
@@ -147,16 +155,16 @@ function verifyLaunch(): void {
     pumpfunUrl: `https://pump.fun/coin/${mint}`,
     bountyUrl: BOUNTY_URL,
   };
-  // Best effort: leave a copy in the grader's output dir when one is
-  // provided (MAKEFUN_OUTPUT_DIR is the env the grader sets; OUTPUT_DIR
-  // is accepted as an alias). The run still succeeds when the output dir
-  // is missing or read-only.
+  // Best effort: leave a verbatim copy of the committed record in the
+  // grader's output dir when one is provided (MAKEFUN_OUTPUT_DIR is the
+  // env the grader sets; OUTPUT_DIR is accepted as an alias). The run
+  // still succeeds when the output dir is missing or read-only.
   const outDir =
     process.env.MAKEFUN_OUTPUT_DIR || process.env.OUTPUT_DIR || "/output";
   let copiedToOutput = false;
   try {
     if (existsSync(outDir)) {
-      writeFileSync(`${outDir}/LAUNCH.json`, JSON.stringify(launch, null, 2) + "\n");
+      writeFileSync(`${outDir}/LAUNCH.json`, readFileSync(launchPath, "utf-8"));
       copiedToOutput = true;
     }
   } catch {
@@ -243,13 +251,12 @@ async function launch(): Promise<void> {
 
   const result = { signature: finalCreateSig, success: true };
 
+  // The committed record is the starter shape: exactly mint +
+  // create_signature. Extra fields break the gate (fix2: valid 0), so
+  // never add name/symbol/signature/pumpfunUrl/bountyUrl here.
   const launch = {
-    name: COIN_NAME,
-    symbol: COIN_SYMBOL,
     mint: mintPubkey.toBase58(),
-    signature: result.signature,
-    pumpfunUrl: `https://pump.fun/coin/${mintPubkey.toBase58()}`,
-    bountyUrl: BOUNTY_URL,
+    create_signature: result.signature,
   };
   // The on-chain launch is the deliverable; the local record must never
   // turn a successful launch into a failed run (e.g. read-only checkout).
